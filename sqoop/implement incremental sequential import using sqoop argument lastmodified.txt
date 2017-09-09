@@ -1,0 +1,188 @@
+# This code shows how to use --incremental lastmodified mode to load new delta data from mysql table
+# 1. We'll first create mysql table to be used as source
+# 2. Then we'll create hive table on top of an hdfs directory in which mysql data is to be imported using sqoop
+# 3. Next, we'll create sqoop job.
+# 4. We'll execute sqoop job twice, firstly to import existing data and secondly to import newly added data.
+# 5. Please note that the initial value of --last-value argument has to be zero so that all the existing records are imported properly. The --last-value gets changed to the current timestamp of that particular sqoop job execution.
+
+# Environment details:
+# Cloudera VM version:2.6.0-cdh5.8.0, r57e7b8556919574d517e874abfb7ebe31a366c2b
+# Sqoop version:Sqoop 1.4.6-cdh5.8.0
+# Mysql Server version:5.1.73
+
+# create mysql source table
+CREATE DATABASE IF NOT EXISTS temp_db;
+CREATE TABLE temp_db.dummy_incremental_modified(
+id int AUTO_INCREMENT,
+name varchar(50),
+load_ts timestamp DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+primary key(id)
+);
+
+# load source table with sample data
+INSERT INTO temp_db.dummy_incremental_modified(name) VALUES('john'),('james'),('larsen'),('ross');
+
+# check if data is loaded
+mysql> select * from dummy_incremental_modified;
++----+--------+---------------------+
+| id | name   | load_ts             |
++----+--------+---------------------+
+|  1 | john   | 2017-09-09 01:51:07 |
+|  2 | james  | 2017-09-09 01:51:07 |
+|  3 | larsen | 2017-09-09 01:51:07 |
+|  4 | ross   | 2017-09-09 01:51:07 |
++----+--------+---------------------+
+4 rows in set (0.00 sec)
+
+# create external hive table
+CREATE DATABASE IF NOT EXISTS sqoop_import
+LOCATION '/user/hive/warehouse/sqoop_import';
+
+CREATE EXTERNAL TABLE IF NOT EXISTS sqoop_import.external_incremental_lastmodified(
+id int,
+name string,
+load_ts timestamp
+)
+ROW FORMAT DELIMITED
+FIELDS TERMINATED BY "|"
+LINES TERMINATED BY "\n"
+STORED AS TEXTFILE
+LOCATION '/user/hive/warehouse/sqoop_import/external_incremental_lastmodified';
+
+# check if external hive table is created
+0: jdbc:hive2://localhost:10000> select * from external_incremental_lastmodified;
+INFO  : Compiling command(queryId=hive_20170909084545_3ab4aa59-f46a-4189-9ea3-9ace4b660bc0): select * from external_incremental_lastmodified
+INFO  : Semantic Analysis Completed
+INFO  : Returning Hive schema: Schema(fieldSchemas:[FieldSchema(name:external_incremental_lastmodified.id, type:int, comment:null), FieldSchema(name:external_incremental_lastmodified.name, type:string, comment:null), FieldSchema(name:external_incremental_lastmodified.load_ts, type:timestamp, comment:null)], properties:null)
+INFO  : Completed compiling command(queryId=hive_20170909084545_3ab4aa59-f46a-4189-9ea3-9ace4b660bc0); Time taken: 0.871 seconds
+INFO  : Executing command(queryId=hive_20170909084545_3ab4aa59-f46a-4189-9ea3-9ace4b660bc0): select * from external_incremental_lastmodified
+INFO  : Completed executing command(queryId=hive_20170909084545_3ab4aa59-f46a-4189-9ea3-9ace4b660bc0); Time taken: 0.002 seconds
+INFO  : OK
++---------------------------------------+-----------------------------------------+--------------------------------------------+--+
+| external_incremental_lastmodified.id  | external_incremental_lastmodified.name  | external_incremental_lastmodified.load_ts  |
++---------------------------------------+-----------------------------------------+--------------------------------------------+--+
++---------------------------------------+-----------------------------------------+--------------------------------------------+--+
+No rows selected (0.948 seconds)
+
+# create sqoop job to append new sequential data
+# Please note that we must use sqoop argument --append in our job, otherwise sqoop will raise an error while execution
+sqoop job \
+--create incremental_lastmodified_job \
+-- import \
+--connect "jdbc:mysql://quickstart.cloudera:3306/temp_db" \
+--username cloudera \
+--password cloudera \
+--table dummy_incremental_modified \
+-m 1 \
+--as-textfile \
+--fields-terminated-by "|" \
+--lines-terminated-by "\n" \
+--null-string '\\N' \
+--null-non-string '\\N' \
+--target-dir '/user/hive/warehouse/sqoop_import/external_incremental_lastmodified' \
+--incremental lastmodified \
+--check-column load_ts \
+--last-value 0 \
+--append \
+--outdir /home/cloudera/sqoop_import_generated_code \
+--class-name temp_db.dummy_incremental_modified
+
+# to check if sqoop job is successfully created, you can use below commands
+sqoop job --list
+sqoop job --show incremental_lastmodified_job
+
+# run sqoop job for the initial load
+# it'll prompt you for mysql password everytime you execute the job. Please type the password and press enter.
+# To avoid this password prompt, we can use --password-file or --password-alias arguments
+sqoop job --exec incremental_lastmodified_job
+
+# lower and upper bound values from sqoop execution log while executing sqoop job for the first time
+# Please note that unlike "--incremental append" mode, the upper bound is not the max value from load_ts column. Instead it is the timestamp of the current execution of sqoop job.
+17/09/09 08:49:31 INFO tool.ImportTool: Incremental import based on column `load_ts`
+17/09/09 08:49:31 INFO tool.ImportTool: Lower bound value: '0'
+17/09/09 08:49:31 INFO tool.ImportTool: Upper bound value: '2017-09-09 08:49:31.0'
+
+# listing of external hive table's hdfs directory
+[cloudera@quickstart ~]$ hadoop fs -ls /user/hive/warehouse/sqoop_import/external_incremental_lastmodified
+Found 1 items
+-rw-r--r--   1 cloudera cloudera        119 2017-09-09 08:50 /user/hive/warehouse/sqoop_import/external_incremental_lastmodified/part-m-00000
+[cloudera@quickstart ~]$ 
+
+# check if the source data is properly loaded into external hive table
+0: jdbc:hive2://localhost:10000> select * from external_incremental_lastmodified;
+INFO  : Compiling command(queryId=hive_20170909085050_4e99d2b9-92ca-4116-a1e2-99300326f68d): select * from external_incremental_lastmodified
+INFO  : Semantic Analysis Completed
+INFO  : Returning Hive schema: Schema(fieldSchemas:[FieldSchema(name:external_incremental_lastmodified.id, type:int, comment:null), FieldSchema(name:external_incremental_lastmodified.name, type:string, comment:null), FieldSchema(name:external_incremental_lastmodified.load_ts, type:timestamp, comment:null)], properties:null)
+INFO  : Completed compiling command(queryId=hive_20170909085050_4e99d2b9-92ca-4116-a1e2-99300326f68d); Time taken: 0.105 seconds
+INFO  : Executing command(queryId=hive_20170909085050_4e99d2b9-92ca-4116-a1e2-99300326f68d): select * from external_incremental_lastmodified
+INFO  : Completed executing command(queryId=hive_20170909085050_4e99d2b9-92ca-4116-a1e2-99300326f68d); Time taken: 0.002 seconds
+INFO  : OK
++---------------------------------------+-----------------------------------------+--------------------------------------------+--+
+| external_incremental_lastmodified.id  | external_incremental_lastmodified.name  | external_incremental_lastmodified.load_ts  |
++---------------------------------------+-----------------------------------------+--------------------------------------------+--+
+| 1                                     | john                                    | 2017-09-09 01:51:07.0                      |
+| 2                                     | james                                   | 2017-09-09 01:51:07.0                      |
+| 3                                     | larsen                                  | 2017-09-09 01:51:07.0                      |
+| 4                                     | ross                                    | 2017-09-09 01:51:07.0                      |
++---------------------------------------+-----------------------------------------+--------------------------------------------+--+
+4 rows selected (0.436 seconds)
+
+# let's insert another 5 records into mysql source table
+INSERT INTO temp_db.dummy_incremental_modified(name) VALUES('satya'),('sunder'),('larry'),('steve'),('bill');
+
+# check if new data is inserted in source table
+# as you can observe, 5 new records have current_timestamp of mysql server and auto-incremented ids starting from 5-9
+mysql> select * from dummy_incremental_modified;
++----+--------+---------------------+
+| id | name   | load_ts             |
++----+--------+---------------------+
+|  1 | john   | 2017-09-09 01:51:07 |
+|  2 | james  | 2017-09-09 01:51:07 |
+|  3 | larsen | 2017-09-09 01:51:07 |
+|  4 | ross   | 2017-09-09 01:51:07 |
+|  5 | satya  | 2017-09-09 08:52:03 |
+|  6 | sunder | 2017-09-09 08:52:03 |
+|  7 | larry  | 2017-09-09 08:52:03 |
+|  8 | steve  | 2017-09-09 08:52:03 |
+|  9 | bill   | 2017-09-09 08:52:03 |
++----+--------+---------------------+
+9 rows in set (0.00 sec)
+
+# run sqoop job for importing newly added 5 records
+sqoop job --exec incremental_lastmodified_job
+
+#lower and upper bound values from sqoop execution log while executing sqoop job for the second time
+17/09/09 08:52:53 INFO tool.ImportTool: Incremental import based on column `load_ts`
+17/09/09 08:52:53 INFO tool.ImportTool: Lower bound value: '2017-09-09 08:49:31.0'
+17/09/09 08:52:53 INFO tool.ImportTool: Upper bound value: '2017-09-09 08:52:53.0'
+
+# listing of external hive table's hdfs directory
+[cloudera@quickstart ~]$ hadoop fs -ls /user/hive/warehouse/sqoop_import/external_incremental_lastmodified
+Found 2 items
+-rw-r--r--   1 cloudera cloudera        119 2017-09-09 08:50 /user/hive/warehouse/sqoop_import/external_incremental_lastmodified/part-m-00000
+-rw-r--r--   1 cloudera cloudera        150 2017-09-09 08:53 /user/hive/warehouse/sqoop_import/external_incremental_lastmodified/part-m-00001
+[cloudera@quickstart ~]$ 
+
+# check if 5 new records from source mysql table are properly loaded into external hive table
+0: jdbc:hive2://localhost:10000> select * from external_incremental_lastmodified;
+INFO  : Compiling command(queryId=hive_20170909085353_bb329357-57e2-4e58-a379-2ac1f8ebf4a7): select * from external_incremental_lastmodified
+INFO  : Semantic Analysis Completed
+INFO  : Returning Hive schema: Schema(fieldSchemas:[FieldSchema(name:external_incremental_lastmodified.id, type:int, comment:null), FieldSchema(name:external_incremental_lastmodified.name, type:string, comment:null), FieldSchema(name:external_incremental_lastmodified.load_ts, type:timestamp, comment:null)], properties:null)
+INFO  : Completed compiling command(queryId=hive_20170909085353_bb329357-57e2-4e58-a379-2ac1f8ebf4a7); Time taken: 0.255 seconds
+INFO  : Executing command(queryId=hive_20170909085353_bb329357-57e2-4e58-a379-2ac1f8ebf4a7): select * from external_incremental_lastmodified
+INFO  : Completed executing command(queryId=hive_20170909085353_bb329357-57e2-4e58-a379-2ac1f8ebf4a7); Time taken: 0.002 seconds
+INFO  : OK
++---------------------------------------+-----------------------------------------+--------------------------------------------+--+
+| external_incremental_lastmodified.id  | external_incremental_lastmodified.name  | external_incremental_lastmodified.load_ts  |
++---------------------------------------+-----------------------------------------+--------------------------------------------+--+
+| 1                                     | john                                    | 2017-09-09 01:51:07.0                      |
+| 2                                     | james                                   | 2017-09-09 01:51:07.0                      |
+| 3                                     | larsen                                  | 2017-09-09 01:51:07.0                      |
+| 4                                     | ross                                    | 2017-09-09 01:51:07.0                      |
+| 5                                     | satya                                   | 2017-09-09 08:52:03.0                      |
+| 6                                     | sunder                                  | 2017-09-09 08:52:03.0                      |
+| 7                                     | larry                                   | 2017-09-09 08:52:03.0                      |
+| 8                                     | steve                                   | 2017-09-09 08:52:03.0                      |
+| 9                                     | bill                                    | 2017-09-09 08:52:03.0                      |
++---------------------------------------+-----------------------------------------+--------------------------------------------+--+
+9 rows selected (0.35 seconds)
