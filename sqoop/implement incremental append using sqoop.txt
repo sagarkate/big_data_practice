@@ -1,0 +1,153 @@
+#This code shows how to use --incremental append mode to load new delta data from mysql table
+#1. We'll first create mysql table to be used as source
+#2. Then we'll create hive table on top of an hdfs directory in which mysql data is to be imported using sqoop
+#3. Next, we'll create sqoop job.
+#4. We'll execute sqoop job twice, firstly to import existing data and secondly to import newly added data.
+#5. Please note that the initial value of --last-value argument has to be zero so that all the existing records are imported properly. The --last-value gets changed to the upper bound of that particular sqoop job execution.
+
+#Environment details:
+#Cloudera VM version:2.6.0-cdh5.8.0, r57e7b8556919574d517e874abfb7ebe31a366c2b
+#Sqoop version:Sqoop 1.4.6-cdh5.8.0
+#Mysql Server version:5.1.73
+
+#create mysql db and table and load with sample data
+CREATE DATABASE IF NOT EXISTS temp_db;
+CREATE TABLE temp_db.dummy_incremental_append(
+id int NOT NULL AUTO_INCREMENT,
+name varchar(50),
+primary key(id)
+);
+
+INSERT INTO temp_db.dummy_incremental_append(name) VALUES('john'),('james'),('larsen'),('ross');
+
+mysql> select * from dummy_incremental_append;
++----+--------+
+| id | name   |
++----+--------+
+|  1 | john   |
+|  2 | james  |
+|  3 | larsen |
+|  4 | ross   |
++----+--------+
+4 rows in set (0.00 sec)
+
+#create external hive table
+CREATE DATABASE IF NOT EXISTS sqoop_import
+LOCATION '/user/hive/warehouse/sqoop_import';
+
+CREATE EXTERNAL TABLE IF NOT EXISTS sqoop_import.external_incremental_append(
+id int,
+name string
+)
+ROW FORMAT DELIMITED
+FIELDS TERMINATED BY "|"
+LINES TERMINATED BY "\n"
+STORED AS TEXTFILE
+LOCATION '/user/hive/warehouse/sqoop_import/external_incremental_append';
+
+0: jdbc:hive2://localhost:10000> select * from sqoop_import.external_incremental_append;
+INFO  : Compiling command(queryId=hive_20170909050202_8a407020-9f55-4412-8270-fcc81fe5180f): select * from sqoop_import.external_incremental_append
+INFO  : Semantic Analysis Completed
+INFO  : Returning Hive schema: Schema(fieldSchemas:[FieldSchema(name:external_incremental_append.id, type:int, comment:null), FieldSchema(name:external_incremental_append.name, type:string, comment:null)], properties:null)
+INFO  : Completed compiling command(queryId=hive_20170909050202_8a407020-9f55-4412-8270-fcc81fe5180f); Time taken: 0.989 seconds
+INFO  : Executing command(queryId=hive_20170909050202_8a407020-9f55-4412-8270-fcc81fe5180f): select * from sqoop_import.external_incremental_append
+INFO  : Completed executing command(queryId=hive_20170909050202_8a407020-9f55-4412-8270-fcc81fe5180f); Time taken: 0.002 seconds
+INFO  : OK
++---------------------------------+-----------------------------------+--+
+| external_incremental_append.id  | external_incremental_append.name  |
++---------------------------------+-----------------------------------+--+
++---------------------------------+-----------------------------------+--+
+No rows selected (1.066 seconds)
+
+#sqoop job
+sqoop job \
+--create incremental_append_job \
+-- import \
+--connect "jdbc:mysql://quickstart.cloudera:3306/temp_db" \
+--username cloudera \
+--password cloudera \
+--table dummy_incremental_append \
+-m 1 \
+--as-textfile \
+--fields-terminated-by "|" \
+--lines-terminated-by "\n" \
+--null-string '\\N' \
+--null-non-string '\\N' \
+--target-dir '/user/hive/warehouse/sqoop_import/external_incremental_append' \
+--incremental append \
+--check-column id \
+--last-value 0 \
+--outdir /home/cloudera/sqoop_immport_generated_code \
+--class-name temp_db.dummy_incremental_append
+
+#to check if sqoop job is successfully created, you can use below commands
+sqoop job --list
+sqoop job --show incremental_append_job
+
+#run sqoop job for the initial load
+#it'll prompt you for mysql password everytime you execute the job. Please type the password and press enter.
+#To avoid this password prompt, we can use --password-file or --password-alias arguments
+sqoop job --exec incremental_append_job
+
+0: jdbc:hive2://localhost:10000> select * from sqoop_import.external_incremental_append;
+INFO  : Compiling command(queryId=hive_20170909050808_f950f4c5-b4cf-4791-a9c6-372d951a6ec0): select * from sqoop_import.external_incremental_append
+INFO  : Semantic Analysis Completed
+INFO  : Returning Hive schema: Schema(fieldSchemas:[FieldSchema(name:external_incremental_append.id, type:int, comment:null), FieldSchema(name:external_incremental_append.name, type:string, comment:null)], properties:null)
+INFO  : Completed compiling command(queryId=hive_20170909050808_f950f4c5-b4cf-4791-a9c6-372d951a6ec0); Time taken: 0.156 seconds
+INFO  : Executing command(queryId=hive_20170909050808_f950f4c5-b4cf-4791-a9c6-372d951a6ec0): select * from sqoop_import.external_incremental_append
+INFO  : Completed executing command(queryId=hive_20170909050808_f950f4c5-b4cf-4791-a9c6-372d951a6ec0); Time taken: 0.002 seconds
+INFO  : OK
++---------------------------------+-----------------------------------+--+
+| external_incremental_append.id  | external_incremental_append.name  |
++---------------------------------+-----------------------------------+--+
+| 1                               | john                              |
+| 2                               | james                             |
+| 3                               | larsen                            |
+| 4                               | ross                              |
++---------------------------------+-----------------------------------+--+
+4 rows selected (0.545 seconds)
+
+#let's insert another 5 records into mysql source table
+INSERT INTO temp_db.dummy_incremental_append(name) VALUES('satya'),('sunder'),('larry'),('steve'),('bill');
+
+mysql> select * from dummy_incremental_append;
++----+--------+
+| id | name   |
++----+--------+
+|  1 | john   |
+|  2 | james  |
+|  3 | larsen |
+|  4 | ross   |
+|  5 | satya  |
+|  6 | sunder |
+|  7 | larry  |
+|  8 | steve  |
+|  9 | bill   |
++----+--------+
+9 rows in set (0.00 sec)
+
+#run sqoop job for importing newly added 5 records
+sqoop job --exec incremental_append_job
+
+0: jdbc:hive2://localhost:10000> select * from sqoop_import.external_incremental_append;
+INFO  : Compiling command(queryId=hive_20170909052828_ad63fc5f-b110-4d5d-8f41-6059b1a09715): select * from sqoop_import.external_incremental_append
+INFO  : Semantic Analysis Completed
+INFO  : Returning Hive schema: Schema(fieldSchemas:[FieldSchema(name:external_incremental_append.id, type:int, comment:null), FieldSchema(name:external_incremental_append.name, type:string, comment:null)], properties:null)
+INFO  : Completed compiling command(queryId=hive_20170909052828_ad63fc5f-b110-4d5d-8f41-6059b1a09715); Time taken: 0.155 seconds
+INFO  : Executing command(queryId=hive_20170909052828_ad63fc5f-b110-4d5d-8f41-6059b1a09715): select * from sqoop_import.external_incremental_append
+INFO  : Completed executing command(queryId=hive_20170909052828_ad63fc5f-b110-4d5d-8f41-6059b1a09715); Time taken: 0.001 seconds
+INFO  : OK
++---------------------------------+-----------------------------------+--+
+| external_incremental_append.id  | external_incremental_append.name  |
++---------------------------------+-----------------------------------+--+
+| 1                               | john                              |
+| 2                               | james                             |
+| 3                               | larsen                            |
+| 4                               | ross                              |
+| 5                               | satya                             |
+| 6                               | sunder                            |
+| 7                               | larry                             |
+| 8                               | steve                             |
+| 9                               | bill                              |
++---------------------------------+-----------------------------------+--+
+9 rows selected (0.291 seconds)
