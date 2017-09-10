@@ -218,7 +218,7 @@ sqoop job --exec incremental_lastmodified_job
 17/09/09 09:18:03 INFO tool.ImportTool: Upper bound value: '2017-09-09 09:18:03.0'
 
 # listing of external hive table's hdfs directory after third execution of sqoop job
-# A new partition file is created : part-m-00002
+# A new output file is created : part-m-00002
 [cloudera@quickstart ~]$ hadoop fs -ls /user/hive/warehouse/sqoop_import/external_incremental_lastmodified
 Found 3 items
 -rw-r--r--   1 cloudera cloudera        119 2017-09-09 08:50 /user/hive/warehouse/sqoop_import/external_incremental_lastmodified/part-m-00000
@@ -287,7 +287,7 @@ sqoop job --exec incremental_lastmodified_job_upsert
 17/09/09 09:28:45 INFO tool.ImportTool: Upper bound value: '2017-09-09 09:28:45.0'
 
 # listing of external hive table's hdfs directory after execution of upsert sqoop job
-# Please note that the old 3 partition files are removed from the hdfs directory and the new single merged partition file is created by the new sqoop job
+# Please note that the old 3 output files are removed from the hdfs directory and the new single merged output file is created by the new sqoop job
 [cloudera@quickstart ~]$ hadoop fs -ls /user/hive/warehouse/sqoop_import/external_incremental_lastmodified
 Found 2 items
 -rw-r--r--   1 cloudera cloudera          0 2017-09-09 09:30 /user/hive/warehouse/sqoop_import/external_incremental_lastmodified/_SUCCESS
