@@ -1,0 +1,10 @@
+Command: hive --version
+
+O/P:
+[cloudera@quickstart ~]$ hive --version
+17/09/10 04:20:13 WARN mapreduce.TableMapReduceUtil: The hbase-prefix-tree module jar containing PrefixTreeCodec is not present.  Continuing without it.
+Hive 1.1.0-cdh5.8.0
+Subversion file:///data/jenkins/workspace/generic-package-rhel64-6-0/topdir/BUILD/hive-1.1.0-cdh5.8.0 -r Unknown
+Compiled by jenkins on Thu Jun 16 12:38:23 PDT 2016
+From source with checksum 0b5818247943fe4cb9817102c6e87ce3
+[cloudera@quickstart ~]$ 
