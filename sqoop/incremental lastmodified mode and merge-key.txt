@@ -9,6 +9,7 @@
 # Cloudera VM version:2.6.0-cdh5.8.0, r57e7b8556919574d517e874abfb7ebe31a366c2b
 # Sqoop version:Sqoop 1.4.6-cdh5.8.0
 # Mysql Server version:5.1.73
+# Hive Version:Hive 1.1.0-cdh5.8.0
 
 # create mysql source table
 CREATE DATABASE IF NOT EXISTS temp_db;
