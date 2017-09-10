@@ -1,0 +1,22 @@
+# It is very normal to have many output files lying in the hdfs directory of a busy hive table.
+# It could be due to frequent appends of new data.
+# But having lots of small files, or let's say just files, in hdfs puts a lot of load on namenode heap memory.
+# There are many ways to merge these files.
+# Here I'm going to show one of the ways using Hive INSERT statement.
+# We can do that by carrying out INSERT OVERWRITE on the hive table by selecting all the data from it.
+
+# Statement:
+INSERT OVERWRITE TABLE sqoop_import.append_categories SELECT * FROM sqoop_import.append_categories;
+
+# Contents of Hive Table's HDFS directory before executing above Hive statement:
+[cloudera@quickstart ~]$ hadoop fs -ls /user/hive/warehouse/sqoop_import/retail_db/append_categories
+Found 4 items
+-rw-r--r--   1 cloudera cloudera        124 2017-08-30 03:55 /user/hive/warehouse/sqoop_import/retail_db/append_categories/part-m-00000
+-rw-r--r--   1 cloudera cloudera        111 2017-08-30 04:41 /user/hive/warehouse/sqoop_import/retail_db/append_categories/part-m-00001
+-rw-r--r--   1 cloudera cloudera        135 2017-09-06 20:25 /user/hive/warehouse/sqoop_import/retail_db/append_categories/part-m-00002
+-rw-r--r--   1 cloudera cloudera        274 2017-09-07 22:35 /user/hive/warehouse/sqoop_import/retail_db/append_categories/part-m-00003
+
+# Contents of Hive Table's HDFS directory after executing above Hive statement:
+[cloudera@quickstart ~]$ hadoop fs -ls /user/hive/warehouse/sqoop_import/retail_db/append_categories
+Found 1 items
+-rwxrwxrwx   1 cloudera supergroup        644 2017-09-10 04:35 /user/hive/warehouse/sqoop_import/retail_db/append_categories/000000_0
