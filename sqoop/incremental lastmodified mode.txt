@@ -186,3 +186,133 @@ INFO  : OK
 | 9                                     | bill                                    | 2017-09-09 08:52:03.0                      |
 +---------------------------------------+-----------------------------------------+--------------------------------------------+--+
 9 rows selected (0.35 seconds)
+
+# Let's update existing records
+update dummy_incremental_modified set name='larry ellison' where id=7;
+update dummy_incremental_modified set name='henning holck-larsen' where id=3;
+commit;
+
+mysql> select * from dummy_incremental_modified;
++----+----------------------+---------------------+
+| id | name                 | load_ts             |
++----+----------------------+---------------------+
+|  1 | john                 | 2017-09-09 01:51:07 |
+|  2 | james                | 2017-09-09 01:51:07 |
+|  3 | henning holck-larsen | 2017-09-09 09:08:05 |
+|  4 | ross                 | 2017-09-09 01:51:07 |
+|  5 | satya                | 2017-09-09 08:52:03 |
+|  6 | sunder               | 2017-09-09 08:52:03 |
+|  7 | larry ellison        | 2017-09-09 09:04:24 |
+|  8 | steve                | 2017-09-09 08:52:03 |
+|  9 | bill                 | 2017-09-09 08:52:03 |
++----+----------------------+---------------------+
+9 rows in set (0.00 sec)
+
+# run sqoop job for the third time to check if updated records get imported to hive
+sqoop job --exec incremental_lastmodified_job
+
+# lower and upper bound values from sqoop execution log while executing sqoop job for the third time
+17/09/09 09:18:03 INFO tool.ImportTool: Incremental import based on column `load_ts`
+17/09/09 09:18:03 INFO tool.ImportTool: Lower bound value: '2017-09-09 08:52:53.0'
+17/09/09 09:18:03 INFO tool.ImportTool: Upper bound value: '2017-09-09 09:18:03.0'
+
+# listing of external hive table's hdfs directory after third execution of sqoop job
+# A new partition file is created : part-m-00002
+[cloudera@quickstart ~]$ hadoop fs -ls /user/hive/warehouse/sqoop_import/external_incremental_lastmodified
+Found 3 items
+-rw-r--r--   1 cloudera cloudera        119 2017-09-09 08:50 /user/hive/warehouse/sqoop_import/external_incremental_lastmodified/part-m-00000
+-rw-r--r--   1 cloudera cloudera        150 2017-09-09 08:53 /user/hive/warehouse/sqoop_import/external_incremental_lastmodified/part-m-00001
+-rw-r--r--   1 cloudera cloudera         83 2017-09-09 09:18 /user/hive/warehouse/sqoop_import/external_incremental_lastmodified/part-m-00002
+[cloudera@quickstart ~]$ 
+
+# check if the updated records from mysql source tables are properly loaded into external hive table
+0: jdbc:hive2://localhost:10000> select * from external_incremental_lastmodified;
+INFO  : Compiling command(queryId=hive_20170909091818_88681246-f08c-42e5-9b93-80cf2e2e139a): select * from external_incremental_lastmodified
+INFO  : Semantic Analysis Completed
+INFO  : Returning Hive schema: Schema(fieldSchemas:[FieldSchema(name:external_incremental_lastmodified.id, type:int, comment:null), FieldSchema(name:external_incremental_lastmodified.name, type:string, comment:null), FieldSchema(name:external_incremental_lastmodified.load_ts, type:timestamp, comment:null)], properties:null)
+INFO  : Completed compiling command(queryId=hive_20170909091818_88681246-f08c-42e5-9b93-80cf2e2e139a); Time taken: 0.133 seconds
+INFO  : Executing command(queryId=hive_20170909091818_88681246-f08c-42e5-9b93-80cf2e2e139a): select * from external_incremental_lastmodified
+INFO  : Completed executing command(queryId=hive_20170909091818_88681246-f08c-42e5-9b93-80cf2e2e139a); Time taken: 0.002 seconds
+INFO  : OK
++---------------------------------------+-----------------------------------------+--------------------------------------------+--+
+| external_incremental_lastmodified.id  | external_incremental_lastmodified.name  | external_incremental_lastmodified.load_ts  |
++---------------------------------------+-----------------------------------------+--------------------------------------------+--+
+| 1                                     | john                                    | 2017-09-09 01:51:07.0                      |
+| 2                                     | james                                   | 2017-09-09 01:51:07.0                      |
+| 3                                     | larsen                                  | 2017-09-09 01:51:07.0                      |
+| 4                                     | ross                                    | 2017-09-09 01:51:07.0                      |
+| 5                                     | satya                                   | 2017-09-09 08:52:03.0                      |
+| 6                                     | sunder                                  | 2017-09-09 08:52:03.0                      |
+| 7                                     | larry                                   | 2017-09-09 08:52:03.0                      |
+| 8                                     | steve                                   | 2017-09-09 08:52:03.0                      |
+| 9                                     | bill                                    | 2017-09-09 08:52:03.0                      |
+| 3                                     | henning holck-larsen                    | 2017-09-09 09:08:05.0                      |
+| 7                                     | larry ellison                           | 2017-09-09 09:04:24.0                      |
++---------------------------------------+-----------------------------------------+--------------------------------------------+--+
+11 rows selected (0.317 seconds)
+
+# As you can observe in the above listing, the updated records are imported but the old records are still there.
+# This is not always the ideal expected output in the real world scenario.
+# Most of the time, we need our mysql source and hive target to be in sync as well as consistent.
+# To resolve this problem, we must use "--merge-key" argument instead of "--append" argument as shown below.
+# Please note that we've used "--last-value '2017-09-09 08:52:03.0'" instead "--last-value 0", so that only updated records are picked up by our new sqoop job.
+sqoop job \
+--create incremental_lastmodified_job_upsert \
+-- import \
+--connect "jdbc:mysql://quickstart.cloudera:3306/temp_db" \
+--username cloudera \
+--password cloudera \
+--table dummy_incremental_modified \
+-m 1 \
+--as-textfile \
+--fields-terminated-by "|" \
+--lines-terminated-by "\n" \
+--null-string '\\N' \
+--null-non-string '\\N' \
+--target-dir '/user/hive/warehouse/sqoop_import/external_incremental_lastmodified' \
+--incremental lastmodified \
+--check-column load_ts \
+--last-value '2017-09-09 08:52:03.0' \
+--merge-key id \
+--outdir /home/cloudera/sqoop_import_generated_code \
+--class-name dummy_incremental_modified
+
+# Let's run our new sqoop job to import updated records from mysql source table and merge them with hive records.
+sqoop job --exec incremental_lastmodified_job_upsert
+
+# lower and upper bound values from sqoop execution log while executing new upsert sqoop job
+17/09/09 09:28:45 INFO tool.ImportTool: Incremental import based on column `load_ts`
+17/09/09 09:28:45 INFO tool.ImportTool: Lower bound value: '2017-09-09 08:52:03.0'
+17/09/09 09:28:45 INFO tool.ImportTool: Upper bound value: '2017-09-09 09:28:45.0'
+
+# listing of external hive table's hdfs directory after execution of upsert sqoop job
+# Please note that the old 3 partition files are removed from the hdfs directory and the new single merged partition file is created by the new sqoop job
+[cloudera@quickstart ~]$ hadoop fs -ls /user/hive/warehouse/sqoop_import/external_incremental_lastmodified
+Found 2 items
+-rw-r--r--   1 cloudera cloudera          0 2017-09-09 09:30 /user/hive/warehouse/sqoop_import/external_incremental_lastmodified/_SUCCESS
+-rw-r--r--   1 cloudera cloudera        291 2017-09-09 09:30 /user/hive/warehouse/sqoop_import/external_incremental_lastmodified/part-r-00000
+
+# check if the source data is properly loaded into external hive table and both are in sync and consistent
+0: jdbc:hive2://localhost:10000> select * from external_incremental_lastmodified;
+INFO  : Compiling command(queryId=hive_20170909093131_e61887da-0b94-4d9f-93b1-df5c63a42b4a): select * from external_incremental_lastmodified
+INFO  : Semantic Analysis Completed
+INFO  : Returning Hive schema: Schema(fieldSchemas:[FieldSchema(name:external_incremental_lastmodified.id, type:int, comment:null), FieldSchema(name:external_incremental_lastmodified.name, type:string, comment:null), FieldSchema(name:external_incremental_lastmodified.load_ts, type:timestamp, comment:null)], properties:null)
+INFO  : Completed compiling command(queryId=hive_20170909093131_e61887da-0b94-4d9f-93b1-df5c63a42b4a); Time taken: 0.158 seconds
+INFO  : Executing command(queryId=hive_20170909093131_e61887da-0b94-4d9f-93b1-df5c63a42b4a): select * from external_incremental_lastmodified
+INFO  : Completed executing command(queryId=hive_20170909093131_e61887da-0b94-4d9f-93b1-df5c63a42b4a); Time taken: 0.002 seconds
+INFO  : OK
++---------------------------------------+-----------------------------------------+--------------------------------------------+--+
+| external_incremental_lastmodified.id  | external_incremental_lastmodified.name  | external_incremental_lastmodified.load_ts  |
++---------------------------------------+-----------------------------------------+--------------------------------------------+--+
+| 1                                     | john                                    | 2017-09-09 01:51:07.0                      |
+| 2                                     | james                                   | 2017-09-09 01:51:07.0                      |
+| 3                                     | henning holck-larsen                    | 2017-09-09 09:08:05.0                      |
+| 4                                     | ross                                    | 2017-09-09 01:51:07.0                      |
+| 5                                     | satya                                   | 2017-09-09 08:52:03.0                      |
+| 6                                     | sunder                                  | 2017-09-09 08:52:03.0                      |
+| 7                                     | larry ellison                           | 2017-09-09 09:04:24.0                      |
+| 8                                     | steve                                   | 2017-09-09 08:52:03.0                      |
+| 9                                     | bill                                    | 2017-09-09 08:52:03.0                      |
++---------------------------------------+-----------------------------------------+--------------------------------------------+--+
+9 rows selected (0.256 seconds)
+
